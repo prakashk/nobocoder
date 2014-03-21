@@ -4,18 +4,20 @@
 import System.IO
 import Data.Function (on)
 import Data.List (sortBy)
-import Control.Monad (liftM)
+import Control.Monad (forM, forM_)
+import Levenshtein (dist)
 
+-- filter when predicate is false
+filterNot p = filter (not . p)
+
+-- join list of strings using delimiter
+join :: String -> [String] -> String
+join _ [] = ""
+join d (x:[]) = x
+join d (x:xs) = x ++ d ++ join d xs
+
+minSimilarity = 0.75
 type Dictionary = [String]
-
-main = do
-  print $ map (\term -> suggestions term dictionary isSimilar)
-        $ filter (isBadWord) terms
-     where terms = ["good", "word", "here", "badd", "wurd", "herre", "notaword"]
-           minSimilarity = 0.75
-           dictionary = getLines "../files/words.txt"
-           isBadWord w = not $ w `elem` dictionary
-           isSimilar = (minSimilarity <)
 
 -- get suggestions for a term
 suggestions :: String -> Dictionary -> (Double -> Bool) -> [String]
@@ -24,34 +26,28 @@ suggestions term dict isSimilar = map (fst)
                                   $ filter (\a -> isSimilar $ snd a)
                                   $ map (\dw -> (dw, similarity term dw)) dict
 
--- get all lines from given file
-getLines :: FilePath -> [String]
-getLines = liftM lines . readFile
+-- compute similarity score (inverse of the distance) for pair of
+-- words.  Not sure how close this is to the Apache Lucene's
+-- LevenshteinDisatnce, but since it returns a float between 0
+-- (completely different) and 1.0 (identical), let's try to do the
+-- same thing.  The return values appear to coincide with the example
+-- words listed on https://github.com/xrrocha/nobocoder
 
--- compute similarity score for the given pair of words
 similarity :: String -> String -> Double
-similarity w1 w2 = dist w1 w2
+similarity w1 w2 =
+  let distance = dist w1 w2
+      maxLength = max (length w1) (length w2)
+  in 1.0 - (fromIntegral distance / fromIntegral maxLength)
 
--- Levenshtein edit-distance implementation
--- from: http://www.haskell.org/haskellwiki/Edit_distance
-
-dist :: Eq a => [a] -> [a] -> Int
-dist a b
-    = last (if lab == 0 then mainDiag
-            else if lab > 0 then lowers !! (lab - 1)
-                 else{- < 0 -}   uppers !! (-1 - lab))
-    where mainDiag = oneDiag a b (head uppers) (-1 : head lowers)
-          uppers = eachDiag a b (mainDiag : uppers) -- upper diagonals
-          lowers = eachDiag b a (mainDiag : lowers) -- lower diagonals
-          eachDiag a [] diags = []
-          eachDiag a (bch:bs) (lastDiag:diags) = oneDiag a bs nextDiag lastDiag : eachDiag a bs diags
-              where nextDiag = head (tail diags)
-          oneDiag a b diagAbove diagBelow = thisdiag
-              where doDiag [] b nw n w = []
-                    doDiag a [] nw n w = []
-                    doDiag (ach:as) (bch:bs) nw n w = me : (doDiag as bs me (tail n) (tail w))
-                        where me = if ach == bch then nw else 1 + min3 (head w) nw (head n)
-                    firstelt = 1 + head diagBelow
-                    thisdiag = firstelt : doDiag a b firstelt diagAbove (tail diagBelow)
-          lab = length a - length b
-          min3 x y z = if x < y then x else min y z
+main = do
+  contents <- readFile "../files/words.txt"
+  let dictionary = lines contents
+      terms = ["good", "word", "here", "badd", "wurd", "herre", "notaword"]
+      badTerms = filterNot (\term -> term `elem` dictionary) terms
+      isSimilar = (minSimilarity <=)
+  forM_ badTerms
+    (\term -> do
+        putStrLn $ case suggestions term dictionary isSimilar of
+          []   -> "Whaddaya mean '" ++ term ++ "'?"
+          sugs -> term ++ ": you probably meant one of " ++ join ", " sugs
+    )
